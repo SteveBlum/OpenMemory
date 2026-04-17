@@ -1,0 +1,125 @@
+name: Weekly upstream sync & release image build
+
+on:
+  schedule:
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+  issues: write
+
+jobs:
+  sync-and-maybe-build:
+    runs-on: ubuntu-latest
+    env:
+      GHCR_REPO: openmemory
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Configure git user
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Sync fork with upstream/main
+        id: merge
+        run: |
+          set -euo pipefail
+          FORK_DEFAULT=${GITHUB_REF#refs/heads/}
+          OWNER=${{ github.repository_owner }}
+          REPO=${{ github.event.repository.name }}
+          git checkout "$FORK_DEFAULT"
+          git fetch https://github.com/CaviraOSS/OpenMemory.git --tags main:refs/remotes/upstream/main
+          if git merge --no-edit refs/remotes/upstream/main; then
+            git push origin "$FORK_DEFAULT"
+            echo "merged=true" >> $GITHUB_OUTPUT
+          else
+            echo "merged=false" >> $GITHUB_OUTPUT
+            git merge --abort || true
+            FILES=$(git --no-pager diff --name-only || true)
+            jq -n --arg title "Upstream sync merge conflict" --arg body "Failed to merge upstream/main into $FORK_DEFAULT. Conflicting files:\n$FILES" '{"title":$title,"body":$body}' | \
+              curl -sSL -H "Authorization: token ${GITHUB_TOKEN}" -H "Content-Type: application/json" -d @- "https://api.github.com/repos/$OWNER/$REPO/issues" || true
+            exit 1
+          fi
+
+      - name: Get upstream release and decide
+        id: upstream_release
+        run: |
+          set -e
+          API_URL="https://api.github.com/repos/CaviraOSS/OpenMemory/releases/latest"
+          RELEASE_JSON=$(curl -sSL $API_URL)
+          TAG=$(jq -r '.tag_name // empty' <<<"$RELEASE_JSON")
+          if [ -z "$TAG" ]; then
+            echo "build=false" >> $GITHUB_OUTPUT
+          else
+            IS_PRERELEASE=$(jq -r '.prerelease' <<<"$RELEASE_JSON")
+            IS_DRAFT=$(jq -r '.draft' <<<"$RELEASE_JSON")
+            if [ "$IS_PRERELEASE" = "true" ] || [ "$IS_DRAFT" = "true" ]; then
+              echo "build=false" >> $GITHUB_OUTPUT
+            else
+              echo "build=true" >> $GITHUB_OUTPUT
+              echo "tag=$TAG" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Set up QEMU
+        if: steps.upstream_release.outputs.build == 'true'
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        if: steps.upstream_release.outputs.build == 'true'
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to ghcr
+        if: steps.upstream_release.outputs.build == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Dashboard image
+        if: steps.upstream_release.outputs.build == 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: ./dashboard
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ghcr.io/${{ github.repository_owner }}/${{ env.GHCR_REPO }}:dashboard-${{ steps.upstream_release.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push JS backend image
+        if: steps.upstream_release.outputs.build == 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: ./packages/openmemory-js
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ghcr.io/${{ github.repository_owner }}/${{ env.GHCR_REPO }}:js-${{ steps.upstream_release.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Create or update fork release
+        if: steps.upstream_release.outputs.build == 'true'
+        run: |
+          TAG=${{ steps.upstream_release.outputs.tag }}
+          OWNER=${{ github.repository_owner }}
+          REPO=${{ github.event.repository.name }}
+          DASH_TAG=ghcr.io/$OWNER/${{ env.GHCR_REPO }}:dashboard-$TAG
+          JS_TAG=ghcr.io/$OWNER/${{ env.GHCR_REPO }}:js-$TAG
+          BODY="Images published:\n- $DASH_TAG\n- $JS_TAG\n\nUpstream release: https://github.com/CaviraOSS/OpenMemory/releases/tag/$TAG"
+          STATUS=$(curl -sSL -o /dev/null -w "%{http_code}" -H "Authorization: token ${GITHUB_TOKEN}" "https://api.github.com/repos/$OWNER/$REPO/releases/tags/$TAG" || true)
+          if [ "$STATUS" = "200" ]; then
+            ID=$(curl -sSL -H "Authorization: token ${GITHUB_TOKEN}" "https://api.github.com/repos/$OWNER/$REPO/releases/tags/$TAG" | jq -r .id)
+            jq -n --arg body "$BODY" '{"body":$body}' | \
+              curl -sSL -X PATCH -H "Authorization: token ${GITHUB_TOKEN}" -H "Content-Type: application/json" -d @- "https://api.github.com/repos/$OWNER/$REPO/releases/$ID" || true
+          else
+            jq -n --arg tag "$TAG" --arg name "$TAG" --arg body "$BODY" '{"tag_name":$tag,"name":$name,"body":$body,"draft":false,"prerelease":false}' | \
+              curl -sSL -X POST -H "Authorization: token ${GITHUB_TOKEN}" -H "Content-Type: application/json" -d @- "https://api.github.com/repos/$OWNER/$REPO/releases" || true
+          fi
