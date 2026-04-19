@@ -9,7 +9,6 @@ permissions:
   contents: write
   packages: write
   issues: write
-  workflows: write
 
 jobs:
   sync-and-build:
@@ -73,7 +72,17 @@ jobs:
 
       - name: Push new tag to fork
         if: steps.new_tag.outputs.has_new == 'true'
-        run: git push origin "refs/tags/${{ steps.new_tag.outputs.tag }}"
+        env:
+          OWNER: ${{ steps.owner.outputs.value }}
+          REPO: ${{ github.event.repository.name }}
+          TAG: ${{ steps.new_tag.outputs.tag }}
+        run: |
+          SHA=$(git rev-list -n 1 "refs/tags/$TAG")
+          curl -sSL -X POST \
+            -H "Authorization: token ${GITHUB_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"ref\":\"refs/tags/$TAG\",\"sha\":\"$SHA\"}" \
+            "https://api.github.com/repos/$OWNER/$REPO/git/refs"
 
       - name: Checkout new tag
         if: steps.new_tag.outputs.has_new == 'true'
