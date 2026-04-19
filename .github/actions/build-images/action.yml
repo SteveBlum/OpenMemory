@@ -17,6 +17,10 @@ runs:
       shell: bash
       run: echo "value=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_OUTPUT
 
+    - name: Mount tag commit as worktree
+      shell: bash
+      run: git worktree add /tmp/build-context "refs/tags/${{ inputs.tag }}"
+
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v3
 
@@ -33,7 +37,7 @@ runs:
     - name: Build and push Dashboard image
       uses: docker/build-push-action@v6
       with:
-        context: ./dashboard
+        context: /tmp/build-context/dashboard
         push: true
         platforms: linux/amd64,linux/arm64
         tags: ghcr.io/${{ steps.owner.outputs.value }}/openmemory:dashboard-${{ inputs.tag }}
@@ -43,12 +47,16 @@ runs:
     - name: Build and push JS backend image
       uses: docker/build-push-action@v6
       with:
-        context: ./packages/openmemory-js
+        context: /tmp/build-context/packages/openmemory-js
         push: true
         platforms: linux/amd64,linux/arm64
         tags: ghcr.io/${{ steps.owner.outputs.value }}/openmemory:js-${{ inputs.tag }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
+
+    - name: Remove worktree
+      shell: bash
+      run: git worktree remove /tmp/build-context
 
     - name: Create fork release
       shell: bash
