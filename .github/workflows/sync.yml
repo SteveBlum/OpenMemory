@@ -77,7 +77,7 @@ jobs:
           REPO: ${{ github.event.repository.name }}
           TAG: ${{ steps.new_tag.outputs.tag }}
         run: |
-          SHA=$(git rev-list -n 1 "refs/tags/$TAG")
+          SHA=$(git rev-parse HEAD)
           curl -sSL -X POST \
             -H "Authorization: token ${GITHUB_TOKEN}" \
             -H "Content-Type: application/json" \
