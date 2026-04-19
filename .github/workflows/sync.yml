@@ -60,7 +60,7 @@ jobs:
         run: |
           set -euo pipefail
           git tag -l | sort > /tmp/all_tags.txt
-          MISSING=$(comm -13 /tmp/fork_tags.txt /tmp/all_tags.txt)
+          MISSING=$(comm -13 /tmp/fork_tags.txt /tmp/all_tags.txt | grep -v '^v1\.3\.0$')
           if [ -z "$MISSING" ]; then
             echo "No new tags."
             echo "has_new=false" >> $GITHUB_OUTPUT
