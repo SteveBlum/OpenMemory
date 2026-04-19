@@ -84,10 +84,6 @@ jobs:
             -d "{\"ref\":\"refs/tags/$TAG\",\"sha\":\"$SHA\"}" \
             "https://api.github.com/repos/$OWNER/$REPO/git/refs"
 
-      - name: Checkout new tag
-        if: steps.new_tag.outputs.has_new == 'true'
-        run: git checkout --detach "refs/tags/${{ steps.new_tag.outputs.tag }}"
-
       - name: Build and push images
         if: steps.new_tag.outputs.has_new == 'true'
         uses: ./.github/actions/build-images
