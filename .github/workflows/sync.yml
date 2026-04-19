@@ -77,13 +77,12 @@ jobs:
           REPO: ${{ github.event.repository.name }}
           TAG: ${{ steps.new_tag.outputs.tag }}
         run: |
-          SHA=$(git rev-parse HEAD)
+          SHA=$(git rev-list -n 1 "refs/tags/$TAG")
           curl -sSL -X POST \
             -H "Authorization: token ${GITHUB_TOKEN}" \
             -H "Content-Type: application/json" \
             -d "{\"ref\":\"refs/tags/$TAG\",\"sha\":\"$SHA\"}" \
             "https://api.github.com/repos/$OWNER/$REPO/git/refs"
-          git update-ref "refs/tags/$TAG" "$SHA"
 
       - name: Build and push images
         if: steps.new_tag.outputs.has_new == 'true'

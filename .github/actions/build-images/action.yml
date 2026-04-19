@@ -12,10 +12,6 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Checkout tag
-      shell: bash
-      run: git checkout --detach "refs/tags/${{ inputs.tag }}"
-
     - name: Set lowercase owner
       id: owner
       shell: bash
