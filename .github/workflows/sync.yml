@@ -1,0 +1,86 @@
+name: Weekly upstream sync and build
+
+on:
+  schedule:
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+  issues: write
+
+jobs:
+  sync-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git user
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Set lowercase owner
+        id: owner
+        run: echo "value=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_OUTPUT
+
+      - name: Record existing fork tags
+        run: git tag -l | sort > /tmp/fork_tags.txt
+
+      - name: Sync fork with upstream/main
+        run: |
+          set -euo pipefail
+          FORK_DEFAULT=${GITHUB_REF#refs/heads/}
+          OWNER=${{ steps.owner.outputs.value }}
+          REPO=${{ github.event.repository.name }}
+          git checkout "$FORK_DEFAULT"
+          git fetch https://github.com/CaviraOSS/OpenMemory.git --tags main:refs/remotes/upstream/main
+          if git merge --no-edit refs/remotes/upstream/main; then
+            git push origin "$FORK_DEFAULT"
+          else
+            git merge --abort || true
+            FILES=$(git --no-pager diff --name-only || true)
+            jq -n --arg title "Upstream sync merge conflict" \
+              --arg body "Failed to merge upstream/main into $FORK_DEFAULT. Conflicting files:\n$FILES" \
+              '{"title":$title,"body":$body}' | \
+              curl -sSL \
+                -H "Authorization: token ${GITHUB_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d @- \
+                "https://api.github.com/repos/$OWNER/$REPO/issues" || true
+            exit 1
+          fi
+
+      - name: Detect newest missing upstream tag
+        id: new_tag
+        run: |
+          set -euo pipefail
+          git tag -l | sort > /tmp/all_tags.txt
+          MISSING=$(comm -13 /tmp/fork_tags.txt /tmp/all_tags.txt)
+          if [ -z "$MISSING" ]; then
+            echo "No new tags."
+            echo "has_new=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          TAG=$(echo "$MISSING" | sort -V | tail -1)
+          echo "has_new=true" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Push new tag to fork
+        if: steps.new_tag.outputs.has_new == 'true'
+        run: git push origin "refs/tags/${{ steps.new_tag.outputs.tag }}"
+
+      - name: Checkout new tag
+        if: steps.new_tag.outputs.has_new == 'true'
+        run: git checkout --detach "refs/tags/${{ steps.new_tag.outputs.tag }}"
+
+      - name: Build and push images
+        if: steps.new_tag.outputs.has_new == 'true'
+        uses: ./.github/actions/build-images
+        with:
+          tag: ${{ steps.new_tag.outputs.tag }}
+          token: ${{ secrets.GITHUB_TOKEN }}

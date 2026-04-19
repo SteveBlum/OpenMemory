@@ -1,0 +1,85 @@
+name: "build-images"
+description: "Builds and pushes dashboard and JS backend Docker images for a given tag and creates a fork release"
+
+inputs:
+  tag:
+    required: true
+    description: "Tag to build images for"
+  token:
+    required: true
+    description: "GitHub token for GHCR login and release creation"
+
+runs:
+  using: composite
+  steps:
+    - name: Set lowercase owner
+      id: owner
+      shell: bash
+      run: echo "value=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_OUTPUT
+
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Login to GHCR
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.token }}
+
+    - name: Build and push Dashboard image
+      uses: docker/build-push-action@v6
+      with:
+        context: ./dashboard
+        push: true
+        platforms: linux/amd64,linux/arm64
+        tags: ghcr.io/${{ steps.owner.outputs.value }}/openmemory:dashboard-${{ inputs.tag }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Build and push JS backend image
+      uses: docker/build-push-action@v6
+      with:
+        context: ./packages/openmemory-js
+        push: true
+        platforms: linux/amd64,linux/arm64
+        tags: ghcr.io/${{ steps.owner.outputs.value }}/openmemory:js-${{ inputs.tag }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Create fork release
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+        TAG=${{ inputs.tag }}
+        OWNER=${{ steps.owner.outputs.value }}
+        REPO=${{ github.event.repository.name }}
+        DASH_IMG="ghcr.io/$OWNER/openmemory:dashboard-$TAG"
+        JS_IMG="ghcr.io/$OWNER/openmemory:js-$TAG"
+        BODY="Images published:\n- $DASH_IMG\n- $JS_IMG\n\nUpstream release: https://github.com/CaviraOSS/OpenMemory/releases/tag/$TAG"
+        STATUS=$(curl -sSL -o /dev/null -w "%{http_code}" \
+          -H "Authorization: token $GH_TOKEN" \
+          "https://api.github.com/repos/$OWNER/$REPO/releases/tags/$TAG" || true)
+        if [ "$STATUS" = "200" ]; then
+          ID=$(curl -sSL -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/$OWNER/$REPO/releases/tags/$TAG" | jq -r .id)
+          jq -n --arg body "$BODY" '{"body":$body}' | \
+            curl -sSL -X PATCH \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d @- \
+              "https://api.github.com/repos/$OWNER/$REPO/releases/$ID" || true
+        else
+          jq -n --arg tag "$TAG" --arg name "$TAG" --arg body "$BODY" \
+            '{"tag_name":$tag,"name":$name,"body":$body,"draft":false,"prerelease":false}' | \
+            curl -sSL -X POST \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d @- \
+              "https://api.github.com/repos/$OWNER/$REPO/releases" || true
+        fi
