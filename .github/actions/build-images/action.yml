@@ -1,5 +1,5 @@
 name: "build-images"
-description: "Builds and pushes dashboard and JS backend Docker images for a given tag and creates a fork release"
+description: "Builds and pushes Docker images for a given tag and creates a fork release"
 
 inputs:
   tag:
@@ -21,6 +21,14 @@ runs:
       shell: bash
       run: git worktree add /tmp/build-context "refs/tags/${{ inputs.tag }}"
 
+    - name: Check build contexts
+      id: ctx
+      shell: bash
+      run: |
+        [ -d /tmp/build-context/dashboard ] && echo "dashboard=true" >> $GITHUB_OUTPUT || echo "dashboard=false" >> $GITHUB_OUTPUT
+        [ -d /tmp/build-context/packages/openmemory-js ] && echo "js=true" >> $GITHUB_OUTPUT || echo "js=false" >> $GITHUB_OUTPUT
+        [ -d /tmp/build-context/backend ] && echo "backend=true" >> $GITHUB_OUTPUT || echo "backend=false" >> $GITHUB_OUTPUT
+
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v3
 
@@ -35,6 +43,7 @@ runs:
         password: ${{ inputs.token }}
 
     - name: Build and push Dashboard image
+      if: steps.ctx.outputs.dashboard == 'true'
       uses: docker/build-push-action@v6
       with:
         context: /tmp/build-context/dashboard
@@ -45,12 +54,24 @@ runs:
         cache-to: type=gha,mode=max
 
     - name: Build and push JS backend image
+      if: steps.ctx.outputs.js == 'true'
       uses: docker/build-push-action@v6
       with:
         context: /tmp/build-context/packages/openmemory-js
         push: true
         platforms: linux/amd64,linux/arm64
         tags: ghcr.io/${{ steps.owner.outputs.value }}/openmemory:js-${{ inputs.tag }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Build and push backend image
+      if: steps.ctx.outputs.backend == 'true'
+      uses: docker/build-push-action@v6
+      with:
+        context: /tmp/build-context/backend
+        push: true
+        platforms: linux/amd64,linux/arm64
+        tags: ghcr.io/${{ steps.owner.outputs.value }}/openmemory:backend-${{ inputs.tag }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
@@ -67,9 +88,7 @@ runs:
         TAG=${{ inputs.tag }}
         OWNER=${{ steps.owner.outputs.value }}
         REPO=${{ github.event.repository.name }}
-        DASH_IMG="ghcr.io/$OWNER/openmemory:dashboard-$TAG"
-        JS_IMG="ghcr.io/$OWNER/openmemory:js-$TAG"
-        BODY="Images published:\n- $DASH_IMG\n- $JS_IMG\n\nUpstream release: https://github.com/CaviraOSS/OpenMemory/releases/tag/$TAG"
+        BODY="Upstream release: https://github.com/CaviraOSS/OpenMemory/releases/tag/$TAG"
         STATUS=$(curl -sSL -o /dev/null -w "%{http_code}" \
           -H "Authorization: token $GH_TOKEN" \
           "https://api.github.com/repos/$OWNER/$REPO/releases/tags/$TAG" || true)
