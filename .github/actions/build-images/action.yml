@@ -25,9 +25,9 @@ runs:
       id: ctx
       shell: bash
       run: |
-        [ -d /tmp/build-context/dashboard ] && echo "dashboard=true" >> $GITHUB_OUTPUT || echo "dashboard=false" >> $GITHUB_OUTPUT
-        [ -d /tmp/build-context/packages/openmemory-js ] && echo "js=true" >> $GITHUB_OUTPUT || echo "js=false" >> $GITHUB_OUTPUT
-        [ -d /tmp/build-context/backend ] && echo "backend=true" >> $GITHUB_OUTPUT || echo "backend=false" >> $GITHUB_OUTPUT
+        [ -f /tmp/build-context/dashboard/Dockerfile ] && echo "dashboard=true" >> $GITHUB_OUTPUT || echo "dashboard=false" >> $GITHUB_OUTPUT
+        [ -f /tmp/build-context/packages/openmemory-js/Dockerfile ] && echo "js=true" >> $GITHUB_OUTPUT || echo "js=false" >> $GITHUB_OUTPUT
+        [ -f /tmp/build-context/backend/Dockerfile ] && echo "backend=true" >> $GITHUB_OUTPUT || echo "backend=false" >> $GITHUB_OUTPUT
 
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v3
